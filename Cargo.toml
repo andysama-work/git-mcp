@@ -1,0 +1,16 @@
+[package]
+name = "git-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Git MCP Server - 通过 MCP 协议提供 Git 操作工具"
+
+[[bin]]
+name = "git-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { version = "0.3", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+git2 = "0.19"
