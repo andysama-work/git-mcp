@@ -1,0 +1,164 @@
+name: 🚀 Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: git-mcp
+
+jobs:
+  check-version:
+    name: 🔍 检测版本变化
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.new }}
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 🔍 检测版本变化
+        id: version
+        run: |
+          OLD=$(git show HEAD^:Cargo.toml | grep '^version' | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          NEW=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          echo "old=$OLD"
+          echo "new=$NEW"
+          echo "old=$OLD" >> $GITHUB_OUTPUT
+          echo "new=$NEW" >> $GITHUB_OUTPUT
+          if [ "$OLD" != "$NEW" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: 🔨 构建 ${{ matrix.target }}
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            ext: .exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ""
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            ext: ""
+
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🦀 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 💾 缓存 Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: 🔨 构建
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: 📦 打包
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.zip ${{ env.BINARY_NAME }}${{ matrix.ext }}
+          else
+            tar czvf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}${{ matrix.ext }}
+          fi
+
+      - name: 📤 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: ${{ env.BINARY_NAME }}-${{ matrix.target }}.*
+
+  release:
+    name: 🚀 发布 Release
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📥 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📋 整理文件
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec mv {} release/ \;
+          ls -la release/
+
+      - name: 🏷️ 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: v${{ needs.check-version.outputs.version }}
+          body: |
+            ## 📦 Git MCP Server v${{ needs.check-version.outputs.version }}
+            
+            基于 MCP 协议的 Git 操作工具，让 AI 助手帮你管理 Git 提交。
+            
+            ### 下载
+            
+            | 平台 | 架构 | 下载 |
+            |------|------|------|
+            | Windows | x64 | [git-mcp-x86_64-pc-windows-msvc.zip](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/git-mcp-x86_64-pc-windows-msvc.zip) |
+            | Linux | x64 | [git-mcp-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/git-mcp-x86_64-unknown-linux-gnu.tar.gz) |
+            | macOS | x64 | [git-mcp-x86_64-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/git-mcp-x86_64-apple-darwin.tar.gz) |
+            | macOS | ARM64 | [git-mcp-aarch64-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/v${{ needs.check-version.outputs.version }}/git-mcp-aarch64-apple-darwin.tar.gz) |
+            
+            ### MCP 配置示例
+            
+            ```json
+            {
+              "mcpServers": {
+                "git-mcp": {
+                  "command": "/path/to/git-mcp"
+                }
+              }
+            }
+            ```
+            
+            ### 提供的工具
+            
+            - `git_status` - 查看仓库变更
+            - `generate_commit_message` - 生成规范提交信息
+            - `git_commit` - 执行提交
+            - `list_commit_types` - 列出提交类型
+            - `git_log` - 查看提交历史
+            - `git_branch` - 查看当前分支
+          files: release/*
+          draft: false
+          prerelease: false
