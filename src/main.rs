@@ -66,6 +66,26 @@ pub struct GitCommitParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct CommitGroup {
+    #[schemars(description = "要提交的文件路径列表")]
+    pub files: Vec<String>,
+    #[schemars(description = "提交类型: feat/fix/docs/style/refactor/perf/test/chore/build/ci/revert/init/ui/config/merge")]
+    pub commit_type: String,
+    #[schemars(description = "简短描述（不超过50字符）")]
+    pub short_desc: String,
+    #[schemars(description = "详细描述列表，每项一个变更点")]
+    pub details: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SmartCommitParam {
+    #[schemars(description = "提交组列表，每组包含文件列表和提交信息，按优先级排序（fix优先，然后feat，最后其他）")]
+    pub commits: Vec<CommitGroup>,
+    #[schemars(description = "Git 仓库路径，默认为当前目录")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GitLogParam {
     #[schemars(description = "显示的提交数量，默认10条")]
     pub count: Option<u32>,
@@ -250,6 +270,117 @@ impl GitMcpServer {
             }
             Ok(o) => format!("❌ 获取分支失败: {}", String::from_utf8_lossy(&o.stderr)),
             Err(e) => format!("❌ 执行失败: {}", e),
+        }
+    }
+
+    /// 智能分类提交
+    #[tool(description = "智能分类提交：根据变更类型分组，依次执行多次提交。每组指定文件列表和提交信息，实现 fix/feat/style 等分类提交")]
+    async fn smart_commit(&self, Parameters(param): Parameters<SmartCommitParam>) -> String {
+        let repo_path = param.path.unwrap_or_else(|| ".".to_string());
+        let mut results = Vec::new();
+        let mut success_count = 0;
+
+        for (idx, group) in param.commits.iter().enumerate() {
+            // 获取提交类型信息
+            let type_info = COMMIT_TYPES
+                .iter()
+                .find(|t| t.name == group.commit_type)
+                .unwrap_or(&COMMIT_TYPES[0]);
+
+            // 构建提交信息
+            let details_str = group.details
+                .iter()
+                .map(|d| format!("- {}", d))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let commit_msg = if group.details.is_empty() {
+                format!("{} {}: {}", type_info.emoji, type_info.name, group.short_desc)
+            } else {
+                format!(
+                    "{} {}: {}\n\n详细描述：\n{}",
+                    type_info.emoji, type_info.name, group.short_desc, details_str
+                )
+            };
+
+            // git add 指定文件
+            let mut add_args = vec!["add".to_string()];
+            add_args.extend(group.files.clone());
+
+            let add_output = Command::new("git")
+                .args(&add_args)
+                .current_dir(&repo_path)
+                .output();
+
+            match add_output {
+                Ok(output) if !output.status.success() => {
+                    results.push(format!(
+                        "❌ 第{}组 [{}] git add 失败: {}",
+                        idx + 1,
+                        group.commit_type,
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    results.push(format!(
+                        "❌ 第{}组 [{}] 执行 git add 失败: {}",
+                        idx + 1,
+                        group.commit_type,
+                        e
+                    ));
+                    continue;
+                }
+                _ => {}
+            }
+
+            // git commit
+            let commit_output = Command::new("git")
+                .args(["commit", "-m", &commit_msg])
+                .current_dir(&repo_path)
+                .output();
+
+            match commit_output {
+                Ok(output) if output.status.success() => {
+                    success_count += 1;
+                    results.push(format!(
+                        "✅ 第{}组 [{}]: {} ({} 个文件)",
+                        idx + 1,
+                        group.commit_type,
+                        group.short_desc,
+                        group.files.len()
+                    ));
+                }
+                Ok(output) => {
+                    results.push(format!(
+                        "❌ 第{}组 [{}] git commit 失败: {}",
+                        idx + 1,
+                        group.commit_type,
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                Err(e) => {
+                    results.push(format!(
+                        "❌ 第{}组 [{}] 执行 git commit 失败: {}",
+                        idx + 1,
+                        group.commit_type,
+                        e
+                    ));
+                }
+            }
+        }
+
+        let summary = format!(
+            "📊 分类提交完成：{}/{} 组成功\n\n{}",
+            success_count,
+            param.commits.len(),
+            results.join("\n")
+        );
+
+        if success_count > 0 {
+            format!("{}\n\n💡 如需推送，请执行: git push", summary)
+        } else {
+            summary
         }
     }
 }
