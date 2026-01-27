@@ -1,6 +1,6 @@
 [package]
 name = "git-mcp"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Git MCP Server - 通过 MCP 协议提供 Git 操作工具"
 
