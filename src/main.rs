@@ -281,6 +281,12 @@ impl GitMcpServer {
         let mut success_count = 0;
 
         for (idx, group) in param.commits.iter().enumerate() {
+            // 先清空暂存区，确保只提交当前组的文件
+            let _ = Command::new("git")
+                .args(["reset", "HEAD"])
+                .current_dir(&repo_path)
+                .output();
+
             // 获取提交类型信息
             let type_info = COMMIT_TYPES
                 .iter()
@@ -304,7 +310,7 @@ impl GitMcpServer {
             };
 
             // git add 指定文件
-            let mut add_args = vec!["add".to_string()];
+            let mut add_args = vec!["add".to_string(), "--".to_string()];
             add_args.extend(group.files.clone());
 
             let add_output = Command::new("git")
